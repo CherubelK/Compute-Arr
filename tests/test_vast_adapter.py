@@ -59,7 +59,6 @@ def test_submit_rents_cheapest_offer():
     rent_payload = {"success": True, "new_contract": 99}
     captured = {}
 
-    responses_iter = iter([search_payload, rent_payload])
     def handler(req: httpx.Request):
         if req.method == "PUT":
             captured["url"] = str(req.url)
@@ -93,6 +92,12 @@ def test_status_running():
     s = adapter.status("99")
     assert s.state == "running"
     assert s.cost_so_far == pytest.approx(0.35 * 7200 / 3600, rel=1e-3)
+
+
+def test_status_null_while_provisioning_is_pending():
+    payload = {"instances": [{"actual_status": None, "cost_per_hr": 0.35, "duration": None}]}
+    adapter = VastAdapter(api_key="test", http_client=_mock_client([payload]))
+    assert adapter.status("99").state == "pending"
 
 
 def test_status_not_found_raises():

@@ -1,14 +1,13 @@
-from datetime import datetime
+from fastapi import APIRouter, Depends
 
-from fastapi import APIRouter
-
+from app.auth import require_api_key
 from app.cache import offer_cache
 
 router = APIRouter()
 
 
 @router.get("/providers")
-def list_providers() -> list[dict]:
+def list_providers(_: None = Depends(require_api_key)) -> list[dict]:
     """Return the latest cached price/health snapshot for every known provider."""
     snapshots = offer_cache.get_all()
     return [

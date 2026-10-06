@@ -7,8 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-import app.models  # noqa: F401 — must be imported before Base.metadata.create_all
-
+import app.models  # must be imported before Base.metadata.create_all
 from app.auth import require_api_key
 from app.database import Base, get_db
 from app.dependencies import get_adapters
@@ -60,10 +59,3 @@ def client(db_session):
         yield c
 
     app.dependency_overrides.clear()
-
-
-@pytest.fixture()
-def authed_client(client):
-    """Client that sends the API key header (used when auth is NOT overridden)."""
-    client.headers.update({"X-API-Key": "changeme"})
-    return client

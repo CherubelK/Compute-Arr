@@ -1,12 +1,10 @@
 """Unit tests for the router ranking logic (no DB, no HTTP)."""
-import pytest
+from datetime import datetime, timezone
 
 from app.cache import OfferCache, ProviderSnapshot
 from app.providers.base import Offer
 from app.router import _rank, route
 from app.stats import StatsTracker
-
-from datetime import datetime, timezone
 
 
 def _snap(provider_id: str, offers: list[Offer]) -> ProviderSnapshot:
@@ -50,10 +48,11 @@ def test_reliable_sorts_by_availability_rate_then_price(monkeypatch):
     assert ranked[0].provider == "good"
 
 
-def test_fastest_sorts_by_availability_then_price(monkeypatch):
+def test_fastest_sorts_by_provision_time_then_price(monkeypatch):
     tracker = StatsTracker()
-    tracker.record_poll("fast", "H100", available=True)
-    tracker.record_poll("slow", "H100", available=False)
+    tracker.record_provision("fast", "H100", 20.0)
+    tracker.record_provision("fast", "H100", 40.0)
+    tracker.record_provision("slow", "H100", 240.0)
 
     monkeypatch.setattr("app.router.stats_tracker", tracker)
 
@@ -63,6 +62,38 @@ def test_fastest_sorts_by_availability_then_price(monkeypatch):
     ]
     ranked = _rank(offers, "fastest")
     assert ranked[0].provider == "fast"
+
+
+def test_fastest_ranks_providers_without_history_last(monkeypatch):
+    tracker = StatsTracker()
+    tracker.record_provision("measured", "H100", 300.0)
+
+    monkeypatch.setattr("app.router.stats_tracker", tracker)
+
+    offers = [
+        Offer(provider="unknown", gpu_class="H100", price_per_hr=0.5, available=True),
+        Offer(provider="measured", gpu_class="H100", price_per_hr=1.0, available=True),
+    ]
+    ranked = _rank(offers, "fastest")
+    assert [o.provider for o in ranked] == ["measured", "unknown"]
+
+
+def test_fastest_without_any_history_falls_back_to_price(monkeypatch):
+    monkeypatch.setattr("app.router.stats_tracker", StatsTracker())
+
+    ranked = _rank([_offer("a", 3.0), _offer("b", 1.5)], "fastest")
+    assert ranked[0].provider == "b"
+
+
+def test_provision_average_only_covers_recent_samples():
+    tracker = StatsTracker()
+    for _ in range(20):
+        tracker.record_provision("p", "H100", 600.0)
+    for _ in range(20):
+        tracker.record_provision("p", "H100", 30.0)
+
+    assert tracker.avg_provision_seconds("p", "H100") == 30.0
+    assert tracker.avg_provision_seconds("p", "A100") is None
 
 
 def test_unknown_preference_falls_back_to_cheapest():

@@ -162,6 +162,8 @@ class RunPodAdapter(ProviderAdapter):
 
         raw_status = pod.get("desiredStatus", "DEAD")
         state = _STATUS_MAP.get(raw_status, "failed")
+        if state == "running" and pod.get("runtime") is None:
+            state = "pending"  # RUNNING is the desired state; no runtime means the container isn't up yet
         cost_per_hr: Optional[float] = pod.get("costPerHr")
         uptime_s: Optional[int] = (pod.get("runtime") or {}).get("uptimeInSeconds")
         cost_so_far = None

@@ -6,7 +6,6 @@ class Settings(BaseSettings):
 
     # API
     api_key: str = "changeme"
-    debug: bool = False
 
     # Database
     database_url: str = "postgresql://postgres:postgres@localhost:5432/compute_arr"
@@ -14,6 +13,13 @@ class Settings(BaseSettings):
     # Poller
     poll_interval_seconds: int = 90
     gpu_classes: list[str] = ["H100", "A100", "A40", "RTX4090", "RTX3090", "RTX3080"]
+
+    # Job monitor + failover
+    job_sync_interval_seconds: int = 30
+    max_placement_attempts: int = 3
+    # A job that fails within this many seconds of placement is retried on the
+    # next-best provider. 0 disables failover for jobs that die after launch.
+    early_death_window_seconds: int = 300
 
     # Provider API keys
     runpod_api_key: str = ""

@@ -142,7 +142,7 @@ class VastAdapter(ProviderAdapter):
             raise ProviderError(f"Vast.ai instance not found: {provider_job_id}")
 
         inst = instances[0]
-        raw = inst.get("actual_status", "offline")
+        raw = inst.get("actual_status") or "loading"  # null until the instance starts loading
         state = _STATUS_MAP.get(raw, "failed")
         cost_per_hr: Optional[float] = inst.get("cost_per_hr")
         duration_s: Optional[float] = inst.get("duration")

@@ -3,7 +3,7 @@ In-memory offer cache. Populated by the poller; read by the router and GET /prov
 Thread-safe: the poller writes from a background thread; FastAPI reads from async workers.
 """
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 from app.providers.base import Offer

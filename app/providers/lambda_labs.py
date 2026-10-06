@@ -30,6 +30,7 @@ _STATUS_MAP: dict[str, str] = {
     "active": "running",
     "unhealthy": "failed",
     "terminating": "cancelled",
+    "terminated": "cancelled",
 }
 
 
@@ -162,13 +163,11 @@ class LambdaAdapter(ProviderAdapter):
 
         raw = inst.get("status", "unhealthy")
         state = _STATUS_MAP.get(raw, "failed")
-        price_cents = inst.get("instance_type", {}).get("price_cents_per_hour")
-        cost_so_far = None
-        # Lambda doesn't expose running time directly; cost is approximated elsewhere
+        # Lambda doesn't expose running time, so cost can't be derived here.
         return JobStatus(
             provider_job_id=provider_job_id,
             state=state,
-            cost_so_far=cost_so_far,
+            cost_so_far=None,
         )
 
     def cancel(self, provider_job_id: str) -> None:

@@ -4,8 +4,7 @@ Router v1 — rules-based provider selection.
 Preferences:
   cheapest  → lowest price/hr
   reliable  → highest availability rate (from poller stats), then price
-  fastest   → same as reliable for now; provision-time ranking added once
-              job-level timing data accumulates (Phase 2)
+  fastest   → lowest recent provision time (from the job monitor), then price
 """
 from dataclasses import dataclass
 
@@ -48,9 +47,7 @@ def _rank(offers: list[Offer], preference: str) -> list[Offer]:
     if preference == "cheapest":
         return sorted(offers, key=lambda o: o.price_per_hr)
 
-    if preference in ("reliable", "fastest"):
-        # reliable → best availability rate, then cheapest
-        # fastest  → same proxy until provision-time data exists
+    if preference == "reliable":
         return sorted(
             offers,
             key=lambda o: (
@@ -58,6 +55,15 @@ def _rank(offers: list[Offer], preference: str) -> list[Offer]:
                 o.price_per_hr,
             ),
         )
+
+    if preference == "fastest":
+        # Providers with no observed provision time yet rank after those with
+        # one; with no history at all this degrades to cheapest.
+        def provision_key(o: Offer) -> tuple[bool, float, float]:
+            avg = stats_tracker.avg_provision_seconds(o.provider, o.gpu_class)
+            return (avg is None, avg or 0.0, o.price_per_hr)
+
+        return sorted(offers, key=provision_key)
 
     # unknown preference: fall back to cheapest
     return sorted(offers, key=lambda o: o.price_per_hr)

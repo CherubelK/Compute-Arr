@@ -134,6 +134,16 @@ def test_status_running():
     assert s.cost_so_far == pytest.approx(3.49, rel=1e-3)
 
 
+def test_status_running_without_runtime_is_pending():
+    # desiredStatus is RUNNING as soon as the pod is created; runtime only
+    # appears once the container is actually up.
+    payload = _gql_ok({
+        "pod": {"id": "abc123", "desiredStatus": "RUNNING", "costPerHr": 3.49, "runtime": None}
+    })
+    adapter = RunPodAdapter(api_key="test", http_client=_mock_client([payload]))
+    assert adapter.status("abc123").state == "pending"
+
+
 def test_status_not_found_raises():
     payload = _gql_ok({"pod": None})
     adapter = RunPodAdapter(api_key="test", http_client=_mock_client([payload]))

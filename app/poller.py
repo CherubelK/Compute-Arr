@@ -4,17 +4,11 @@ Background price/health poller.
 Runs on a fixed interval (POLL_INTERVAL_SECONDS). For each enabled provider
 and each tracked GPU class, it calls get_offers(), persists a PriceSnapshot
 row (append-only), and refreshes the in-memory OfferCache.
-
-The scheduler runs in a daemon thread (APScheduler BackgroundScheduler) so it
-doesn't block the FastAPI event loop.
 """
 import logging
 from datetime import datetime, timezone
 
-from apscheduler.schedulers.background import BackgroundScheduler
-
-from app.cache import OfferCache, ProviderSnapshot, offer_cache
-from app.config import settings
+from app.cache import OfferCache, ProviderSnapshot
 from app.database import SessionLocal
 from app.models import PriceSnapshot, Provider
 from app.providers.base import ProviderAdapter, ProviderError
@@ -91,23 +85,3 @@ def poll_once(
         db.rollback()
     finally:
         db.close()
-
-
-def start_poller(adapters: dict[str, ProviderAdapter]) -> BackgroundScheduler:
-    scheduler = BackgroundScheduler(daemon=True)
-    scheduler.add_job(
-        poll_once,
-        trigger="interval",
-        seconds=settings.poll_interval_seconds,
-        args=[adapters, offer_cache, settings.gpu_classes],
-        id="price_poller",
-        next_run_time=datetime.now(timezone.utc),  # run immediately on startup
-    )
-    scheduler.start()
-    logger.info(
-        "Poller started — interval=%ds, providers=%s, gpu_classes=%s",
-        settings.poll_interval_seconds,
-        list(adapters),
-        settings.gpu_classes,
-    )
-    return scheduler

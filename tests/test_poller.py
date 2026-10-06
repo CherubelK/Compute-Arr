@@ -3,12 +3,11 @@ Tests for the poller. Uses SQLite in-memory for the DB and a stub adapter.
 No real provider API calls; no Postgres required.
 """
 import pytest
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.cache import OfferCache
 from app.database import Base
-from app.models import Provider  # noqa: F401 — registers metadata
 from app.models import PriceSnapshot
 from app.poller import poll_once
 from app.providers.base import Offer, ProviderAdapter, ProviderError
@@ -24,11 +23,6 @@ def db_session():
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
     )
-    # SQLite doesn't support UUID natively; map it to TEXT for tests
-    from sqlalchemy.dialects import sqlite
-    from sqlalchemy import TypeDecorator, String
-    import uuid
-
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     session = Session()

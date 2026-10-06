@@ -60,6 +60,9 @@ class Job(Base):
     chosen_provider: Mapped[str | None] = mapped_column(String(64), ForeignKey("providers.id"), nullable=True)
     baseline_provider: Mapped[str] = mapped_column(String(64))
     provider_job_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # Hourly price of the offer the job was placed on, and when that provider accepted it.
+    price_per_hr: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
+    placed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="pending")  # pending|running|succeeded|failed|cancelled
     actual_cost: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -72,13 +75,18 @@ class Job(Base):
 
 
 class RoutingDecision(Base):
-    """Snapshot of the ranked alternatives considered at job submission time."""
+    """
+    Snapshot of the ranked alternatives considered at job submission time.
+
+    chosen_provider is the router's top pick. jobs.chosen_provider is where the
+    job actually ran; the two differ when a failover happened.
+    """
 
     __tablename__ = "routing_decisions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("jobs.id"), unique=True, index=True)
-    # list of {provider, price_per_hr, reason_score, ...} at decision time
+    # list of {provider, gpu_class, price_per_hr, available, region, raw_offer_id} at decision time
     ranked_offers: Mapped[list[Any]] = mapped_column(JSON)
     chosen_provider: Mapped[str] = mapped_column(String(64))
     reason: Mapped[str] = mapped_column(Text)

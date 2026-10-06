@@ -1,8 +1,6 @@
 """Smoke tests for SQLAlchemy model definitions (no DB required)."""
 import uuid
 
-import pytest
-
 from app.models import FailoverEvent, Job, PriceSnapshot, Provider, RoutingDecision
 
 

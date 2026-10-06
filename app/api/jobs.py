@@ -9,8 +9,10 @@ from app.auth import require_api_key
 from app.config import settings
 from app.database import get_db
 from app.dependencies import get_adapters
-from app.models import FailoverEvent, Job, RoutingDecision
-from app.providers.base import JobSpec, Offer, ProviderAdapter, ProviderError
+from app.models import Job, RoutingDecision
+from app.monitor import ACTIVE_STATES, job_cost
+from app.placement import place_with_failover, record_placement
+from app.providers.base import JobSpec, Offer, ProviderError
 from app.router import route
 
 router = APIRouter(prefix="/jobs")
@@ -40,47 +42,6 @@ class JobResponse(BaseModel):
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _submit_with_failover(
-    ranked_offers: list[Offer],
-    job_spec: JobSpec,
-    adapters: dict[str, ProviderAdapter],
-    db: Session,
-    job_id: uuid.UUID,
-) -> tuple[str, Offer]:
-    """
-    Try each ranked offer in order (up to 3). On failure, log a FailoverEvent
-    and advance to the next candidate. Raises ProviderError if all fail.
-    """
-    last_attempted: Optional[str] = None
-    last_error = ""
-
-    for offer in ranked_offers[:3]:
-        adapter = adapters.get(offer.provider)
-        if adapter is None:
-            last_error = f"No adapter configured for provider '{offer.provider}'"
-            continue
-
-        if last_attempted is not None:
-            db.add(
-                FailoverEvent(
-                    job_id=job_id,
-                    from_provider=last_attempted,
-                    to_provider=offer.provider,
-                    reason=last_error,
-                )
-            )
-            db.flush()
-
-        last_attempted = offer.provider
-        try:
-            provider_job_id = adapter.submit(job_spec)
-            return provider_job_id, offer
-        except ProviderError as exc:
-            last_error = str(exc)
-
-    raise ProviderError(f"All providers exhausted. Last error: {last_error}")
-
-
 def _offer_to_dict(o: Offer) -> dict[str, Any]:
     return {
         "provider": o.provider,
@@ -90,6 +51,29 @@ def _offer_to_dict(o: Offer) -> dict[str, Any]:
         "region": o.region,
         "raw_offer_id": o.raw_offer_id,
     }
+
+
+def _job_view(job: Job) -> dict[str, Any]:
+    return {
+        "job_id": str(job.id),
+        "gpu_class": job.gpu_class,
+        "preference": job.preference,
+        "image": job.image,
+        "status": job.status,
+        "chosen_provider": job.chosen_provider,
+        "provider_job_id": job.provider_job_id,
+        "price_per_hr": float(job.price_per_hr) if job.price_per_hr is not None else None,
+        "actual_cost": float(job.actual_cost) if job.actual_cost is not None else None,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+    }
+
+
+def _get_job_or_404(db: Session, job_id: uuid.UUID, for_update: bool = False) -> Job:
+    job = db.get(Job, job_id, with_for_update=for_update)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +96,8 @@ def submit_job(
                    "Check GET /providers or wait for the next poll cycle.",
         )
 
-    # 2. Create a pending job row so we have an ID for failover logging
+    # 2. Persist the job and the router's decision before placing anything,
+    #    so the decision is kept even if every provider turns the job down.
     job = Job(
         id=uuid.uuid4(),
         gpu_class=body.gpu_class,
@@ -124,6 +109,14 @@ def submit_job(
         status="pending",
     )
     db.add(job)
+    db.add(
+        RoutingDecision(
+            job_id=job.id,
+            ranked_offers=[_offer_to_dict(o) for o in result.ranked_offers],
+            chosen_provider=result.chosen_offer.provider,
+            reason=result.reason,
+        )
+    )
     db.flush()
 
     # 3. Submit with automatic failover
@@ -135,86 +128,91 @@ def submit_job(
         env_vars=body.env_vars or {},
     )
     try:
-        provider_job_id, winning_offer = _submit_with_failover(
-            result.ranked_offers, job_spec, adapters, db, job.id
+        placement = place_with_failover(
+            result.ranked_offers,
+            job_spec,
+            adapters,
+            db,
+            job.id,
+            max_attempts=settings.max_placement_attempts,
         )
     except ProviderError as exc:
         job.status = "failed"
         db.commit()
         raise HTTPException(status_code=503, detail=str(exc))
 
-    # 4. Persist final job state + routing decision
-    job.chosen_provider = winning_offer.provider
-    job.provider_job_id = provider_job_id
-    job.status = "running"
-
-    db.add(
-        RoutingDecision(
-            job_id=job.id,
-            ranked_offers=[_offer_to_dict(o) for o in result.ranked_offers],
-            chosen_provider=winning_offer.provider,
-            reason=result.reason,
-        )
-    )
+    # 4. Persist where the job landed
+    record_placement(job, placement)
     db.commit()
+
+    winner = placement.offer
+    reasoning = result.reason
+    if winner.provider != result.chosen_offer.provider:
+        reasoning += f"; failed over to {winner.provider} at ${winner.price_per_hr}/hr"
 
     return JobResponse(
         job_id=str(job.id),
         status=job.status,
-        chosen_provider=winning_offer.provider,
-        price_per_hr=winning_offer.price_per_hr,
-        reasoning=result.reason,
+        chosen_provider=winner.provider,
+        price_per_hr=winner.price_per_hr,
+        reasoning=reasoning,
     )
 
 
 @router.get("/{job_id}")
 def get_job(
-    job_id: str,
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_api_key),
+):
+    # Status and cost are kept current by the background job monitor.
+    return _job_view(_get_job_or_404(db, job_id))
+
+
+@router.post("/{job_id}/cancel")
+def cancel_job(
+    job_id: uuid.UUID,
     db: Session = Depends(get_db),
     adapters: dict = Depends(get_adapters),
     _: None = Depends(require_api_key),
 ):
-    job = db.get(Job, uuid.UUID(job_id))
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    # Lock the row so the job monitor can't act on this job mid-cancel.
+    job = _get_job_or_404(db, job_id, for_update=True)
+    if job.status not in ACTIVE_STATES:
+        raise HTTPException(status_code=409, detail=f"Job is already {job.status}")
 
-    # Poll provider for live status if the job is still active
-    if job.status in ("pending", "running") and job.provider_job_id and job.chosen_provider:
-        adapter = adapters.get(job.chosen_provider)
-        if adapter:
-            try:
-                s = adapter.status(job.provider_job_id)
-                job.status = s.state
-                if s.cost_so_far is not None:
-                    job.actual_cost = s.cost_so_far
-                db.commit()
-            except ProviderError:
-                pass  # stale data is better than a 503
+    adapter = adapters.get(job.chosen_provider)
+    if adapter is None:
+        raise HTTPException(status_code=503, detail="Provider adapter not configured")
 
-    return {
-        "job_id": str(job.id),
-        "gpu_class": job.gpu_class,
-        "preference": job.preference,
-        "image": job.image,
-        "status": job.status,
-        "chosen_provider": job.chosen_provider,
-        "provider_job_id": job.provider_job_id,
-        "actual_cost": float(job.actual_cost) if job.actual_cost is not None else None,
-        "created_at": job.created_at,
-        "updated_at": job.updated_at,
-    }
+    # Capture the final cost first; some providers drop the record on cancel.
+    try:
+        reported_cost = adapter.status(job.provider_job_id).cost_so_far
+    except ProviderError:
+        reported_cost = None
+
+    try:
+        adapter.cancel(job.provider_job_id)
+    except ProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    cost = job_cost(job, reported_cost)
+    if cost is not None:
+        job.actual_cost = cost
+    job.status = "cancelled"
+    db.commit()
+
+    return _job_view(job)
 
 
 @router.get("/{job_id}/logs")
 def get_job_logs(
-    job_id: str,
+    job_id: uuid.UUID,
     db: Session = Depends(get_db),
     adapters: dict = Depends(get_adapters),
     _: None = Depends(require_api_key),
 ):
-    job = db.get(Job, uuid.UUID(job_id))
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = _get_job_or_404(db, job_id)
     if not job.provider_job_id or not job.chosen_provider:
         return {"logs": ""}
 

@@ -114,6 +114,12 @@ def test_status_active():
     assert s.state == "running"
 
 
+def test_status_terminated_maps_to_cancelled():
+    payload = {"data": {"id": "inst-abc", "status": "terminated"}}
+    adapter = LambdaAdapter(api_key="test", http_client=_mock_client([payload]))
+    assert adapter.status("inst-abc").state == "cancelled"
+
+
 def test_status_not_found_raises():
     payload = {"data": None}
     adapter = LambdaAdapter(api_key="test", http_client=_mock_client([payload]))
