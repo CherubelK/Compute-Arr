@@ -1,5 +1,7 @@
 # Compute-Arr — GPU Compute Router
 
+[![tests](https://github.com/CherubelK/Compute-Arr/actions/workflows/ci.yml/badge.svg)](https://github.com/CherubelK/Compute-Arr/actions/workflows/ci.yml)
+
 One API for renting GPUs across several clouds. You submit a job with a GPU class and a preference (`cheapest`, `reliable`, or `fastest`); Compute-Arr picks a provider from live prices, launches the job there, and fails over to the next-best provider if the job can't be placed or dies shortly after launch. It owns no hardware — it is a routing layer on top of RunPod, Vast.ai, and Lambda.
 
 Every price poll, routing decision, and failover is stored in Postgres, so you can see what each job cost and what it would have cost on a baseline provider.
